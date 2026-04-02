@@ -1,0 +1,21 @@
+{
+  "name": "Lota Espresso Tracker",
+  "short_name": "Lota",
+  "description": "Track your espresso shots with precision.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#fdfaf7",
+  "theme_color": "#5f4336",
+  "icons": [
+    {
+      "src": "https://picsum.photos/seed/coffee/192/192",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://picsum.photos/seed/coffee/512/512",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
