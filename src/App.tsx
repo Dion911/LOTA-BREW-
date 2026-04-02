@@ -264,11 +264,11 @@ export default function App() {
   useEffect(() => {
     const storedRecipes = localStorage.getItem('lota_recipes');
     if (storedRecipes) {
-      setRecipes(JSON.parse(storedRecipes));
+      try { setRecipes(JSON.parse(storedRecipes)); } catch (e) { console.error(e); }
     }
     const storedBeans = localStorage.getItem('lota_beans');
     if (storedBeans) {
-      setBeans(JSON.parse(storedBeans));
+      try { setBeans(JSON.parse(storedBeans)); } catch (e) { console.error(e); }
     }
   }, []);
 
