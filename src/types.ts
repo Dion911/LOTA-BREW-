@@ -1,5 +1,6 @@
 export interface Shot {
   id: string;
+  uid?: string;
   bean_name: string;
   roaster: string;
   origin?: string;

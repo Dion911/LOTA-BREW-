@@ -1,0 +1,46 @@
+{
+  "entities": {
+    "Shot": {
+      "title": "Espresso Shot",
+      "description": "A record of an espresso shot brew.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "uid": { "type": "string" },
+        "dose": { "type": "number" },
+        "yield": { "type": "number" },
+        "time": { "type": "number" },
+        "rating": { "type": "number" },
+        "date": { "type": "string", "format": "date-time" },
+        "notes": { "type": "string" },
+        "recipeId": { "type": "string" },
+        "beanId": { "type": "string" }
+      },
+      "required": ["id", "uid", "dose", "yield", "time", "rating", "date"]
+    },
+    "User": {
+      "title": "User Profile",
+      "description": "Information about the app user.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "user"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "User profile document."
+    },
+    "users/{userId}/shots/{shotId}": {
+      "schema": "Shot",
+      "description": "User's espresso shots collection."
+    }
+  }
+}

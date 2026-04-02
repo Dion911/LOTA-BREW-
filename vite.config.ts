@@ -7,21 +7,7 @@ export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   return {
     plugins: [react(), tailwindcss()],
-    base: './',
-    build: {
-      rollupOptions: {
-        output: {
-          entryFileNames: `js/[name].js`,
-          chunkFileNames: `js/[name].js`,
-          assetFileNames: ({name}) => {
-            if (/\.css$/.test(name ?? '')) {
-                return 'css/[name][extname]';
-            }
-            return 'assets/[name][extname]';
-          }
-        }
-      }
-    },
+    base: '/LOTA-BREW-/',
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
     },

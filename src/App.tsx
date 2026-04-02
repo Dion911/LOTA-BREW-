@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
+import { useState, useEffect } from 'react';
 import { 
   Coffee, 
   Plus, 
@@ -32,6 +33,30 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
+  auth, 
+  db, 
+  googleProvider, 
+  signInWithPopup, 
+  signOut, 
+  onAuthStateChanged, 
+  collection, 
+  doc, 
+  setDoc, 
+  getDoc, 
+  getDocs, 
+  query, 
+  orderBy, 
+  onSnapshot, 
+  addDoc, 
+  updateDoc, 
+  deleteDoc, 
+  Timestamp,
+  handleFirestoreError,
+  OperationType,
+  User,
+  testConnection
+} from './firebase';
+import { 
   BarChart, 
   Bar, 
   XAxis, 
@@ -44,6 +69,8 @@ import {
   Cell
 } from 'recharts';
 import { Shot, Stats, WeeklyData, RatingDistribution, Recipe, Bean } from './types';
+
+// Error Boundary Component removed temporarily
 
 const compressImage = (file: File, maxWidth = 1024, maxHeight = 1024): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -84,6 +111,8 @@ const compressImage = (file: File, maxWidth = 1024, maxHeight = 1024): Promise<s
 type Screen = 'home' | 'new-shot' | 'edit-shot' | 'shot-detail' | 'stats' | 'history' | 'settings' | 'recipes';
 
 export default function App() {
+  const [user, setUser] = useState<User | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
   const [currentScreen, setCurrentScreen] = useState<Screen>('home');
   const [shots, setShots] = useState<Shot[]>([]);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
@@ -97,6 +126,133 @@ export default function App() {
   });
 
   useEffect(() => {
+    testConnection();
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setIsAuthReady(true);
+      if (currentUser) {
+        // Sync user profile to Firestore
+        const userRef = doc(db, 'users', currentUser.uid);
+        setDoc(userRef, {
+          uid: currentUser.uid,
+          email: currentUser.email,
+          displayName: currentUser.displayName,
+          photoURL: currentUser.photoURL,
+          role: 'user', // Ensure role is set for security rules
+          created_at: Timestamp.now()
+        }, { merge: true }).catch(err => console.error("Error syncing user:", err));
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (isAuthReady && user) {
+      const shotsRef = collection(db, 'users', user.uid, 'shots');
+      const q = query(shotsRef, orderBy('created_at', 'desc'));
+      
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const shotsData = snapshot.docs.map(doc => {
+          const data = doc.data();
+          return {
+            ...data,
+            id: doc.id,
+            dose: Number(data.dose) || 0,
+            yield: Number(data.yield) || 0,
+            time: Number(data.time) || 0,
+            created_at: data.created_at?.toDate?.()?.toISOString() || data.created_at || new Date().toISOString()
+          } as Shot;
+        });
+        
+        setShots(shotsData);
+        calculateStats(shotsData);
+        setIsLoading(false);
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, `users/${user.uid}/shots`);
+      });
+
+      return () => unsubscribe();
+    } else if (isAuthReady && !user) {
+      setShots([]);
+      setStats(null);
+      setIsLoading(false);
+    }
+  }, [isAuthReady, user]);
+
+  const calculateStats = (shotsData: Shot[]) => {
+    // Calculate stats
+    const total_shots = shotsData.length;
+    let totalRating = 0;
+    let ratedCount = 0;
+    const ratingsCount: Record<string, number> = {};
+    
+    const now = new Date();
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const weeklyData = Array.from({ length: 7 }, (_, i) => ({ day: i.toString(), count: 0, avg_time: 0, total_time: 0 }));
+
+    shotsData.forEach((s) => {
+      // Ratings
+      if (s.rating) {
+        ratingsCount[s.rating] = (ratingsCount[s.rating] || 0) + 1;
+        let val = 0;
+        if (s.rating === 'Great') val = 5;
+        if (s.rating === 'Good') val = 4;
+        if (s.rating === 'Okay') val = 3;
+        if (s.rating === 'Off') val = 2;
+        if (s.rating === 'Bad') val = 1;
+        if (val > 0) {
+          totalRating += val;
+          ratedCount++;
+        }
+      }
+      
+      // Weekly
+      const d = new Date(s.created_at);
+      if (d >= sevenDaysAgo) {
+        const dayOfWeek = d.getDay().toString();
+        const dayObj = weeklyData.find(w => w.day === dayOfWeek);
+        if (dayObj) {
+          dayObj.count++;
+          dayObj.total_time = (dayObj.total_time || 0) + Number(s.time || 0);
+        }
+      }
+    });
+    
+    weeklyData.forEach(w => {
+      if (w.count > 0) w.avg_time = w.total_time / w.count;
+    });
+    
+    const avg_rating = ratedCount > 0 ? totalRating / ratedCount : 0;
+    const ratingsArray = Object.entries(ratingsCount).map(([rating, count]) => ({ rating, count }));
+
+    setStats({
+      stats: { total_shots, avg_rating },
+      weekly: weeklyData,
+      ratings: ratingsArray
+    });
+  };
+
+  const handleLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      console.error("Login failed:", error);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      setCurrentScreen('home');
+    } catch (error) {
+      console.error("Logout failed:", error);
+    }
+  };
+
+  useEffect(() => {
     localStorage.setItem('lota-dark-mode', darkMode.toString());
     if (darkMode) {
       document.documentElement.classList.add('dark');
@@ -106,7 +262,6 @@ export default function App() {
   }, [darkMode]);
 
   useEffect(() => {
-    fetchData();
     const storedRecipes = localStorage.getItem('lota_recipes');
     if (storedRecipes) {
       setRecipes(JSON.parse(storedRecipes));
@@ -128,114 +283,42 @@ export default function App() {
   };
 
   const fetchData = async () => {
-    setIsLoading(true);
-    try {
-      const storedShots = localStorage.getItem('lota_shots');
-      const shotsData: Shot[] = (storedShots ? JSON.parse(storedShots) : []).map((s: any) => ({
-        ...s,
-        dose: Number(s.dose) || 0,
-        yield: Number(s.yield) || 0,
-        time: Number(s.time) || 0,
-      }));
-      
-      // Calculate stats
-      const total_shots = shotsData.length;
-      let totalRating = 0;
-      let ratedCount = 0;
-      const ratingsCount: Record<string, number> = {};
-      
-      const now = new Date();
-      const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-      const weeklyData = Array.from({ length: 7 }, (_, i) => ({ day: i.toString(), count: 0, avg_time: 0, total_time: 0 }));
-
-      shotsData.forEach((s) => {
-        // Ratings
-        if (s.rating) {
-          ratingsCount[s.rating] = (ratingsCount[s.rating] || 0) + 1;
-          let val = 0;
-          if (s.rating === 'Great') val = 5;
-          if (s.rating === 'Good') val = 4;
-          if (s.rating === 'Okay') val = 3;
-          if (s.rating === 'Off') val = 2;
-          if (s.rating === 'Bad') val = 1;
-          if (val > 0) {
-            totalRating += val;
-            ratedCount++;
-          }
-        }
-        
-        // Weekly
-        const d = new Date(s.created_at);
-        if (d >= sevenDaysAgo) {
-          const dayOfWeek = d.getDay().toString();
-          const dayObj = weeklyData.find(w => w.day === dayOfWeek);
-          if (dayObj) {
-            dayObj.count++;
-            dayObj.total_time = (dayObj.total_time || 0) + Number(s.time || 0);
-          }
-        }
-      });
-      
-      weeklyData.forEach(w => {
-        if (w.count > 0) w.avg_time = w.total_time / w.count;
-      });
-      
-      const avg_rating = ratedCount > 0 ? totalRating / ratedCount : 0;
-      const ratingsArray = Object.entries(ratingsCount).map(([rating, count]) => ({ rating, count }));
-
-      const statsData = {
-        stats: { total_shots, avg_rating },
-        weekly: weeklyData,
-        ratings: ratingsArray
-      };
-
-      setShots(shotsData.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()));
-      setStats(statsData);
-    } catch (error) {
-      console.error('Error fetching data:', error);
-    } finally {
-      setIsLoading(false);
-    }
+    // This is now handled by onSnapshot
   };
 
   const handleAddShot = async (shotData: Partial<Shot>) => {
+    if (!user) return;
     if (!shotData.bean_name) {
       alert("Please enter a bean name!");
       return;
     }
 
     try {
-      const storedShots = localStorage.getItem('lota_shots');
-      const currentShots: Shot[] = storedShots ? JSON.parse(storedShots) : [];
-      
-      const newShot: Shot = {
+      const shotsRef = collection(db, 'users', user.uid, 'shots');
+      const newShotData = {
         ...shotData,
+        uid: user.uid,
         dose: Number(shotData.dose) || 0,
         yield: Number(shotData.yield) || 0,
         yield_grams: Number(shotData.yield_grams) || Number(shotData.yield) || 0,
         yield_ml: Number(shotData.yield_ml) || 0,
         time: Number(shotData.time) || 0,
-        id: Date.now().toString(),
-        created_at: shotData.created_at ? new Date(shotData.created_at).toISOString() : new Date().toISOString()
-      } as Shot;
+        created_at: Timestamp.now()
+      };
       
-      const updatedShots = [newShot, ...currentShots];
-      localStorage.setItem('lota_shots', JSON.stringify(updatedShots));
-
-      await fetchData();
+      await addDoc(shotsRef, newShotData);
       setCurrentScreen('home');
     } catch (error) {
-      console.error('Error adding shot:', error);
-      alert("Failed to save shot. Please try again.");
+      handleFirestoreError(error, OperationType.CREATE, `users/${user.uid}/shots`);
     }
   };
 
   const handleUpdateShot = async (id: string, shotData: Partial<Shot>, navigateHome: boolean = true) => {
+    if (!user) return;
     try {
-      const storedShots = localStorage.getItem('lota_shots');
-      const currentShots: Shot[] = storedShots ? JSON.parse(storedShots) : [];
+      const shotRef = doc(db, 'users', user.uid, 'shots', id);
+      const dataToUpdate: any = { ...shotData };
       
-      const dataToUpdate = { ...shotData };
       if (dataToUpdate.dose !== undefined) dataToUpdate.dose = Number(dataToUpdate.dose) || 0;
       if (dataToUpdate.yield !== undefined) {
         dataToUpdate.yield = Number(dataToUpdate.yield) || 0;
@@ -247,43 +330,69 @@ export default function App() {
       }
       if (dataToUpdate.yield_ml !== undefined) dataToUpdate.yield_ml = Number(dataToUpdate.yield_ml) || 0;
       if (dataToUpdate.time !== undefined) dataToUpdate.time = Number(dataToUpdate.time) || 0;
-      if (dataToUpdate.created_at !== undefined) dataToUpdate.created_at = new Date(dataToUpdate.created_at).toISOString();
+      if (dataToUpdate.created_at !== undefined) {
+        dataToUpdate.created_at = Timestamp.fromDate(new Date(dataToUpdate.created_at));
+      }
 
-      const updatedShots = currentShots.map(s => s.id === id ? { ...s, ...dataToUpdate } : s);
-      localStorage.setItem('lota_shots', JSON.stringify(updatedShots));
-
-      await fetchData();
+      await updateDoc(shotRef, dataToUpdate);
       if (navigateHome) {
         setCurrentScreen('home');
       }
     } catch (error) {
-      console.error('Error updating shot:', error);
-      alert("Failed to update shot. Please try again.");
+      handleFirestoreError(error, OperationType.UPDATE, `users/${user.uid}/shots/${id}`);
     }
   };
 
   const handleDeleteShot = async (id: string) => {
+    if (!user) return;
     if (!confirm("Are you sure you want to delete this shot?")) return;
 
     try {
-      const storedShots = localStorage.getItem('lota_shots');
-      const currentShots: Shot[] = storedShots ? JSON.parse(storedShots) : [];
-      
-      const updatedShots = currentShots.filter(s => s.id !== id);
-      localStorage.setItem('lota_shots', JSON.stringify(updatedShots));
-
-      await fetchData();
+      const shotRef = doc(db, 'users', user.uid, 'shots', id);
+      await deleteDoc(shotRef);
       setCurrentScreen('home');
     } catch (error) {
-      console.error('Error deleting shot:', error);
-      alert("Failed to delete shot. Please try again.");
+      handleFirestoreError(error, OperationType.DELETE, `users/${user.uid}/shots/${id}`);
     }
   };
 
   return (
     <div className="max-w-[390px] mx-auto min-h-screen notion-app-container flex flex-col relative overflow-hidden shadow-sm border-x border-notion-border">
-        {/* Main Content */}
-        <main className="flex-1 overflow-y-auto pb-24">
+          {!isAuthReady || (user && isLoading) ? (
+            <div className="flex-1 flex flex-col items-center justify-center p-8 bg-notion-bg">
+              <motion.div 
+                animate={{ rotate: 360 }}
+                transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                className="mb-4"
+              >
+                <Coffee size={32} className="text-notion-secondary" />
+              </motion.div>
+              <p className="text-xs font-bold text-notion-secondary uppercase tracking-widest">Loading Brews...</p>
+            </div>
+          ) : !user ? (
+            <div className="flex-1 flex flex-col items-center justify-center p-8 bg-notion-bg">
+            <div className="w-20 h-20 rounded-3xl bg-notion-hover flex items-center justify-center mb-8 shadow-sm">
+              <Coffee size={40} className="text-notion-text" />
+            </div>
+            <h1 className="text-2xl font-bold mb-2">Lota Brew</h1>
+            <p className="text-notion-secondary text-center mb-12 text-sm leading-relaxed">
+              Track your espresso shots with precision and style. Sign in to sync your data across devices.
+            </p>
+            <button 
+              onClick={handleLogin}
+              className="notion-btn-primary w-full py-4 flex items-center justify-center gap-3 font-semibold shadow-xl active:scale-[0.98] transition-all"
+            >
+              <img src="https://www.google.com/favicon.ico" alt="Google" className="w-5 h-5" />
+              Sign in with Google
+            </button>
+            <p className="mt-8 text-[10px] text-notion-secondary uppercase tracking-widest font-bold">
+              Precision Brewing • Minimal Design
+            </p>
+          </div>
+        ) : (
+          <>
+            {/* Main Content */}
+            <main className="flex-1 overflow-y-auto pb-24">
           <AnimatePresence mode="wait">
             {currentScreen === 'home' && (
               <HomeScreen 
@@ -373,6 +482,8 @@ export default function App() {
                 setDarkMode={setDarkMode}
                 shots={shots}
                 onRefresh={fetchData}
+                user={user}
+                onLogout={handleLogout}
               />
             )}
           </AnimatePresence>
@@ -417,7 +528,9 @@ export default function App() {
             label="Settings"
           />
         </nav>
-    </div>
+          </>
+        )}
+      </div>
   );
 }
 
@@ -2270,7 +2383,7 @@ function RecipesScreen({ recipes, onSave, beans, onSaveBeans, onBack }: { recipe
   );
 }
 
-function SettingsScreen({ onBack, darkMode, setDarkMode, shots, onRefresh }: { onBack: () => void; darkMode: boolean; setDarkMode: (v: boolean) => void; shots: Shot[]; onRefresh: () => void; key?: string }) {
+function SettingsScreen({ onBack, darkMode, setDarkMode, shots, onRefresh, user, onLogout }: { onBack: () => void; darkMode: boolean; setDarkMode: (v: boolean) => void; shots: Shot[]; onRefresh: () => void; user: User | null; onLogout: () => void; key?: string }) {
   const handleExportCSV = () => {
     if (shots.length === 0) {
       alert("No data to export!");
@@ -2340,17 +2453,22 @@ function SettingsScreen({ onBack, darkMode, setDarkMode, shots, onRefresh }: { o
       });
 
       try {
-        const storedShots = localStorage.getItem('lota_shots');
-        const currentShots: Shot[] = storedShots ? JSON.parse(storedShots) : [];
+        if (!user) return;
+        const shotsRef = collection(db, 'users', user.uid, 'shots');
         
-        const newShots = data.map((shot: any) => ({
-          ...shot,
-          id: Date.now().toString() + Math.random().toString(36).substring(7),
-          created_at: shot.created_at || new Date().toISOString()
-        }));
-
-        const updatedShots = [...newShots, ...currentShots];
-        localStorage.setItem('lota_shots', JSON.stringify(updatedShots));
+        for (const shot of data) {
+          const newShotData = {
+            ...shot,
+            uid: user.uid,
+            dose: Number(shot.dose) || 0,
+            yield: Number(shot.yield) || 0,
+            yield_grams: Number(shot.yield_grams) || Number(shot.yield) || 0,
+            yield_ml: Number(shot.yield_ml) || 0,
+            time: Number(shot.time) || 0,
+            created_at: shot.created_at ? Timestamp.fromDate(new Date(shot.created_at)) : Timestamp.now()
+          };
+          await addDoc(shotsRef, newShotData);
+        }
 
         alert(`Successfully imported ${data.length} shots!`);
         onRefresh();
@@ -2375,6 +2493,29 @@ function SettingsScreen({ onBack, darkMode, setDarkMode, shots, onRefresh }: { o
         </button>
         <h1 className="text-lg font-semibold">Settings</h1>
       </header>
+
+      {user && (
+        <div className="border border-notion-border rounded-xl p-4 flex items-center gap-4">
+          {user.photoURL ? (
+            <img src={user.photoURL} alt={user.displayName || ''} className="w-12 h-12 rounded-full border border-notion-border" referrerPolicy="no-referrer" />
+          ) : (
+            <div className="w-12 h-12 rounded-full bg-notion-hover flex items-center justify-center">
+              <Settings size={24} className="text-notion-secondary" />
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-sm truncate">{user.displayName || 'Coffee Enthusiast'}</p>
+            <p className="text-xs text-notion-secondary truncate">{user.email}</p>
+          </div>
+          <button 
+            onClick={onLogout}
+            className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
+            title="Logout"
+          >
+            <RotateCcw size={18} />
+          </button>
+        </div>
+      )}
 
       <div className="border border-notion-border rounded-xl p-4 space-y-4">
         <div className="flex justify-between items-center">

@@ -1,0 +1,119 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {uid}
+    // Fields:
+    //   - uid: string (required) - Unique user ID
+    //   - email: string (required) - User's email address
+    //   - displayName: string (optional) - User's display name
+    //   - photoURL: string (optional) - URL to the user's profile photo
+    //   - created_at: timestamp (required) - When the user first logged in
+    //
+    // Collection: users/{uid}/shots
+    // Document ID: {shotId}
+    // Fields:
+    //   - id: string (required) - Unique identifier for the shot
+    //   - uid: string (required) - User ID of the owner
+    //   - bean_name: string (required) - Name of the coffee beans (max 100 chars)
+    //   - origin: string (optional) - Origin of the coffee beans (max 100 chars)
+    //   - roast_level: string (optional) - Roast level (max 50 chars)
+    //   - brew_method: string (optional) - Brew method (max 100 chars)
+    //   - dose: number (required) - Amount of coffee grounds in grams (positive)
+    //   - yield: number (required) - Amount of brewed espresso in grams (positive)
+    //   - time: number (required) - Brew time in seconds (positive)
+    //   - temperature: number (optional) - Brew temperature in Celsius (positive)
+    //   - rating: string (required) - User rating (Great, Good, Okay, Off, Bad)
+    //   - notes: string (optional) - Additional notes (max 1000 chars)
+    //   - created_at: timestamp (required) - Timestamp when the shot was recorded
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "dionafe911@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidUrl(url) {
+      return url is string && (url.matches("^https://.*") || url.matches("^http://.*"));
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['uid', 'email', 'displayName', 'photoURL', 'created_at', 'role']) &&
+             data.uid == request.auth.uid &&
+             data.email == request.auth.token.email &&
+             isValidEmail(data.email) &&
+             (data.displayName == null || (data.displayName is string && data.displayName.size() < 100)) &&
+             (data.photoURL == null || isValidUrl(data.photoURL)) &&
+             data.created_at is timestamp;
+    }
+
+    function isValidShot(data) {
+      return hasOnlyAllowedFields(['id', 'uid', 'bean_name', 'origin', 'roast_level', 'brew_method', 'dose', 'yield', 'time', 'temperature', 'rating', 'notes', 'created_at']) &&
+             data.uid == request.auth.uid &&
+             data.bean_name is string && data.bean_name.size() > 0 && data.bean_name.size() < 100 &&
+             (data.origin == null || (data.origin is string && data.origin.size() < 100)) &&
+             (data.roast_level == null || (data.roast_level is string && data.roast_level.size() < 50)) &&
+             (data.brew_method == null || (data.brew_method is string && data.brew_method.size() < 100)) &&
+             data.dose is number && data.dose >= 0 &&
+             data.yield is number && data.yield >= 0 &&
+             data.time is number && data.time >= 0 &&
+             (data.temperature == null || (data.temperature is number && data.temperature >= 0)) &&
+             data.rating in ['Great', 'Good', 'Okay', 'Off', 'Bad'] &&
+             (data.notes == null || (data.notes is string && data.notes.size() < 1000)) &&
+             data.created_at is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && (request.resource.data.role == 'user' || isAdmin());
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && (request.resource.data.role == resource.data.role || isAdmin());
+      
+      match /shots/{shotId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId) && isValidShot(request.resource.data);
+        allow update: if isOwner(userId) && isValidShot(request.resource.data);
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
